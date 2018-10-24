@@ -1,223 +1,429 @@
 #include <vector>
+#include <queue>
+#include <numeric>
+#include <algorithm>
+#include <iostream>
+#include <memory>
 
-template <class Container>
-struct ContainerView
-{
-private:
-    Container*    container_;
-public:
-    ContainerView(Container* container);
-    auto begin() const;
-    auto end() const;
-    auto begin();
-    auto end();
-};
-
-template <typename capacity_t>
-class FlowNetwork
+/**
+ * 0 - source
+ * 1 - sink
+ */
+class Network
 {
 public:
-    using id_t = int;
-
-    static const id_t None = -1;
-
+    constexpr static int None = -1;
     struct edge_t
     {
-        id_t            startVertex = None;
-        id_t            finishVertex = None;
-        capacity_t      capacity = 0;
-        capacity_t      flow = 0;
-        capacity_t      residualCapacity() const;
+        int startVertex = None;
+        int finishVertex = None;
+        int capacity = 0;
+        int flow = 0;
+
+        int residualCapacity() const
+        {
+            return capacity - flow;
+        }
+
+        int goThroughEdge(int fromVertex) const { return startVertex == fromVertex ? finishVertex : startVertex; }
     };
 private:
-    std::vector<edge_t> edges_;
-    std::vector<id_t>   previous_edge_;
-    std::vector<id_t>   last_edge_;
+    std::vector<int>        lastEdge_;
+    std::vector<int>        previousEdge_;
+    std::vector<edge_t>     edges_;
 
-    void baseInsertEdge(id_t fromVertex, id_t toVertex, capacity_t capacity);
+    int                     source_;
+    int                     sink_;
+
+    void insertEdgeImpl(int startVertex, int finishVertex, int capacity)
+    {
+        previousEdge_.push_back(lastEdge_.at(startVertex));
+        lastEdge_.at(startVertex) = static_cast<int>(edges_.size());
+        edges_.push_back({startVertex, finishVertex, capacity});
+    }
 public:
-    FlowNetwork(size_t n);
+    Network() = default;
 
-    void insertEdge(id_t fromVertex, id_t toVertex, capacity_t capacity, bool is_directed = true);
+    Network(size_t N, int source, int sink)
+        : lastEdge_(N, None)
+        , source_(source)
+        , sink_(sink)
+    {}
 
-    auto edges() const;
-    auto edges();
-
-    template <typename T>
-    class edge_iterator : public std::iterator<std::forward_iterator_tag, T>
+    void insertEdge(int startVertex, int finishVertex, int capacity, bool isDirected = true)
+    {
+        insertEdgeImpl(startVertex, finishVertex, capacity);
+        insertEdgeImpl(finishVertex, startVertex, isDirected ? 0 : capacity);
+    }
+private:
+    template <bool isBackEdgeIterator>
+    class EdgeIteratorImpl : public std::iterator<std::forward_iterator_tag, edge_t>
     {
     private:
-        id_t            edgeId_ = None;
-        FlowNetwork<capacity_t>* network_;
-    public:
-        friend class VertexView;
-        T* operator->() const;
-        T& operator*() const;
-        auto& operator++();
-        auto operator++(int);
-    };
+        std::vector<edge_t>*    edges_ = nullptr;
+        std::vector<int>*       previousEdge_ = nullptr;
+        int                     edgeId_ = None;
 
-    template <bool is_const = false>
-    struct VertexView
+        EdgeIteratorImpl(
+                std::vector<edge_t>* edges = nullptr,
+                std::vector<int>* previousEdge = nullptr,
+                int edgeId = None)
+            : edges_(edges)
+            , previousEdge_(previousEdge)
+            , edgeId_(edgeId)
+        {}
+    public:
+        friend Network;
+
+        int getEdgeId() const {
+            if constexpr (isBackEdgeIterator)
+                return edgeId_ ^ 1;
+            else
+                return edgeId_;
+        }
+
+        bool isStraight() { return getEdgeId() % 2 == 0; }
+
+        edge_t& getBackEdge() const
+        {
+            if constexpr (isBackEdgeIterator)
+                return edges_->at(edgeId_);
+            else
+                return edges_->at(edgeId_ ^ 1);
+        }
+
+        edge_t& getEdge() const
+        {
+            if constexpr (isBackEdgeIterator)
+                return edges_->at(edgeId_ ^ 1);
+            else
+                return edges_->at(edgeId_);
+        }
+
+        auto& operator++()
+        {
+            edgeId_ = previousEdge_->at(edgeId_);
+            return *this;
+        }
+
+        auto operator++(int)
+        {
+            auto result(*this);
+            operator++();
+            return result;
+        }
+
+        edge_t& operator*() const { return getEdge(); }
+        edge_t* operator->() const { return &getEdge(); }
+
+        explicit operator bool() const { return edgeId_ != None; }
+
+        bool operator==(const EdgeIteratorImpl& other) const
+        {
+            if (!operator bool() && !other)
+                return true;
+            return edges_ == other.edges_ && edgeId_ == other.edgeId_;
+        }
+
+        bool operator!=(const EdgeIteratorImpl& other) const { return !(operator==(other)); }
+
+        void pushFlow(int flow) const
+        {
+            getEdge().flow += flow;
+            getBackEdge().flow -= flow;
+        }
+    };
+public:
+    using EdgeIterator = EdgeIteratorImpl<false>;
+    using BackEdgeIterator = EdgeIteratorImpl<true>;
+
+    auto begin() { return edges_.begin(); }
+    auto end() { return edges_.end(); }
+    auto begin() const { return edges_.begin(); }
+    auto end() const { return edges_.begin(); }
+
+    template <typename Iterator>
+    struct view_t
     {
-    private:
-        id_t vertexId_ = None;
-        FlowNetwork<capacity_t>* network_;
-    public:
-        auto begin() const;
-        auto end() const;
+        Iterator startIterator;
+        Iterator finishIterator;
+        Iterator begin() const { return startIterator; }
+        Iterator end() const { return finishIterator; }
+        void popLastEdge() { ++startIterator; }
+        bool empty() const { return startIterator == finishIterator; }
     };
 
-     auto vertex(id_t vertexId) const;
-     auto vertex(id_t vertexId);
+    auto vertexEdgeList(int vertex) { return view_t<EdgeIterator>{{&edges_, &previousEdge_, lastEdge_.at(vertex)}, {}};}
+    auto vertexBackEdgeList(int vertex) { return view_t<BackEdgeIterator>{{&edges_, &previousEdge_, lastEdge_.at(vertex)}, {}};}
+
+    size_t size() const { return lastEdge_.size(); }
+
+    void clear()
+    {
+        for (auto& edge : edges_)
+            edge.flow = 0;
+    }
+
+    int source() const { return source_; }
+    int sink() const { return sink_; }
 };
 
-template <class Container> inline
-ContainerView<Container>::ContainerView(Container* container) : container_(container) {}
-
-template <class Container> inline
-auto ContainerView<Container>::begin()
+class FlowFindingAlgorithm
 {
-    return container_->begin();
-}
+protected:
+    Network network_;
+    int result_ = 0;
+    size_t size_ = 0;
+public:
+    FlowFindingAlgorithm() = default;
 
-template <class Container> inline
-auto ContainerView<Container>::end()
+    int result() { return result_; }
+    void reset() { network_.clear(); result_ = 0; }
+
+    void loadNetwork(Network&& network) { network_ = std::move(network); size_ = network_.size(); }
+    void storeNetwork(Network& network) { network = std::move(network_); size_ = 0; }
+
+    virtual void run() = 0;
+};
+
+class MalhotraKumarMaheshwari : public FlowFindingAlgorithm
 {
-    return container_->end();
-}
+private:
+    std::vector<int> phi_;
+    std::vector<int> level_;
+    std::vector<Network::view_t<Network::BackEdgeIterator>> incomeEdges_;
+    std::vector<Network::view_t<Network::EdgeIterator>> outcomeEdges_;
+    std::vector<bool> isDeletedVertex_;
 
-template <class Container> inline
-auto ContainerView<Container>::begin() const
-{
-    return container_->begin();
-}
-
-template <class Container> inline
-auto ContainerView<Container>::end() const
-{
-    return container_->end();
-}
-
-template <typename capacity_t> inline capacity_t
-FlowNetwork<capacity_t>::edge_t::residualCapacity() const
-{
-    return capacity - flow;
-}
-
-template <typename capacity_t> inline void
-FlowNetwork<capacity_t>::baseInsertEdge(
-        id_t fromVertex,
-        id_t toVertex,
-        capacity_t capacity)
-{
-    previous_edge_.push_back(last_edge_[fromVertex]);
-    last_edge_[fromVertex] = edges_.size();
-    edges_.push_back({fromVertex, toVertex, capacity});
-}
-
-template <typename capacity_t> inline
-FlowNetwork<capacity_t>::FlowNetwork(size_t n)
-    : last_edge_(n, None)
-{}
-
-template <typename capacity_t> inline
-auto FlowNetwork<capacity_t>::edges() const
-{
-    return ContainerView<const std::vector<edge_t>>(&edges_);
-}
-
-template <typename capacity_t> inline
-auto FlowNetwork<capacity_t>::edges()
-{
-    return ContainerView<std::vector<edge_t>>(&edges_);
-}
-
-
-template <typename capacity_t>
-template <typename T>
-inline T&
-FlowNetwork<capacity_t>::edge_iterator<T>::operator*() const
-{
-    return network_->edges_[edgeId_];
-}
-
-template <typename capacity_t>
-template <typename T>
-inline T*
-FlowNetwork<capacity_t>::edge_iterator<T>::operator->() const
-{
-    return &network_->edges_[edgeId_];
-}
-
-template <typename capacity_t>
-template <typename T>
-inline auto&
-FlowNetwork<capacity_t>::edge_iterator<T>::operator++()
-{
-    edgeId_ = network_->previous_edge_[edgeId_];
-    return *this;
-}
-
-template <typename capacity_t>
-template <typename T>
-inline auto
-FlowNetwork<capacity_t>::edge_iterator<T>::operator++(int)
-{
-    auto result(*this);
-    operator++();
-    return result;
-}
-
-template <typename capacity_t>
-template <bool is_const>
-inline auto
-FlowNetwork<capacity_t>::VertexView<is_const>::begin() const
-{
-    if constexpr (is_const)
+    void prepare()
     {
-        return edge_iterator<const edge_t>{network_->last_edge_[vertexId_], network_};
+        phi_.resize(size_);
+        level_.resize(size_);
+        isDeletedVertex_.resize(size_);
+        incomeEdges_.resize(size_);
+        outcomeEdges_.resize(size_);
     }
-    else
+
+    void buildSlices()
     {
-        return edge_iterator<edge_t>{network_->last_edge_[vertexId_], network_};
-    }
-}
+        level_.assign(size_, std::numeric_limits<int>::max());
 
-template <typename capacity_t>
-template <bool is_const>
-inline auto
-FlowNetwork<capacity_t>::VertexView<is_const>::end() const
-{
-    if constexpr (is_const)
+        std::queue<int> bfsQueue;
+        level_.at(network_.source()) = 0;
+        bfsQueue.push(network_.source());
+
+        while (!bfsQueue.empty())
+        {
+            int currentVertex(bfsQueue.front());
+            bfsQueue.pop();
+//            auto edgeList = network_.vertexEdgeList(currentVertex);
+//            for (auto edge(edgeList.begin()); edge != edgeList.end(); ++edge)
+//                if (edge.isStraight() && level_.at(edge->finishVertex) > level_.at(currentVertex) + 1) {
+//                    level_.at(edge->finishVertex) = level_.at(currentVertex) + 1;
+//                    bfsQueue.push(edge->finishVertex);
+//                }
+            for (const auto& edge : network_.vertexEdgeList(currentVertex))
+                if (edge.residualCapacity() > 0 && level_.at(currentVertex) + 1 < level_.at(edge.finishVertex))
+                {
+                    level_.at(edge.finishVertex) = level_.at(currentVertex) + 1;
+                    bfsQueue.push(edge.finishVertex);
+                }
+        }
+    }
+
+    bool isValidEdge(const Network::edge_t& edge)
     {
-        return edge_iterator<const edge_t>{None, network_};
+        return level_.at(edge.finishVertex) == level_.at(edge.startVertex) + 1
+                && !isDeletedVertex_.at(edge.startVertex)
+                && !isDeletedVertex_.at(edge.finishVertex);
     }
-    else
+
+    void prepareIteration()
     {
-        return edge_iterator<edge_t>{None, network_};
+        for (int vertex(0); vertex != size_; ++vertex)
+        {
+            incomeEdges_.at(vertex) = network_.vertexBackEdgeList(vertex);
+            outcomeEdges_.at(vertex) = network_.vertexEdgeList(vertex);
+        }
+
+        buildSlices();
+
+//        for (int vertex(0); vertex < size_; ++vertex)
+//            if (level_.at(vertex) >= size_)
+//                isDeletedVertex_.at(vertex) = true;
+        isDeletedVertex_.assign(size_, false);
+        phi_.assign(size_, 0);
+        for (int vertex(0); vertex != size_; ++vertex)
+            if (vertex == network_.source())
+            {
+                for (const auto& edge : outcomeEdges_.at(vertex))
+                    if (isValidEdge(edge))
+                        phi_.at(vertex) += edge.residualCapacity();
+            }
+            else if (vertex == network_.sink())
+            {
+                for (const auto& edge : incomeEdges_.at(vertex))
+                    if (isValidEdge(edge))
+                        phi_.at(vertex) += edge.residualCapacity();
+            }
+            else
+            {
+                int incomeResidualCapacity(0), outcomeResidualCapacity(0);
+                for (const auto& edge : incomeEdges_.at(vertex))
+                    if (isValidEdge(edge))
+                        incomeResidualCapacity += edge.residualCapacity();
+                for (const auto& edge : outcomeEdges_.at(vertex))
+                    if (isValidEdge(edge))
+                        outcomeResidualCapacity += edge.residualCapacity();
+                phi_.at(vertex) = std::min(incomeResidualCapacity, outcomeResidualCapacity);
+            }
     }
+
+    int findVertexWithMinimalPhi()
+    {
+        int bestVertex(0);
+        for (int vertex(0); vertex < size_; ++vertex)
+            if (phi_.at(vertex) == 0)
+                isDeletedVertex_.at(vertex) = true;
+            else if (phi_.at(bestVertex) > phi_.at(vertex))
+                bestVertex = vertex;
+        return bestVertex;
+    }
+
+    template <class EdgeIteratorType>
+    void pushFlow(int startVertex, int flow, int finishVertex,
+            std::vector<Network::view_t<EdgeIteratorType>>& edgeListForVertex)
+    {
+        std::queue<int> vertexToProcess;
+        static std::vector<int> addedFlow;
+
+        addedFlow.resize(size_);
+        addedFlow.assign(size_, 0);
+        addedFlow.at(startVertex) = flow;
+        vertexToProcess.push(startVertex);
+
+        while (!vertexToProcess.empty())
+        {
+            int currentVertex(vertexToProcess.front());
+            vertexToProcess.pop();
+            auto& edgeList(edgeListForVertex.at(currentVertex));
+
+            while (addedFlow.at(currentVertex) > 0 && !edgeList.empty())
+            {
+                if (!isValidEdge(*edgeList.begin())
+                    || edgeList.begin()->residualCapacity() == 0)
+                {
+                    edgeList.popLastEdge();
+                    continue;
+                }
+                int nextVertex = edgeList.begin()->goThroughEdge(currentVertex);
+                int currentFlow(std::min({
+                                                 addedFlow.at(currentVertex),
+                                                 edgeList.begin()->residualCapacity(),
+                                                 phi_.at(nextVertex) - addedFlow.at(nextVertex)
+                                         }));
+                if (currentFlow == 0)
+                {
+                    edgeList.popLastEdge();
+                    continue;
+                }
+                edgeList.begin().pushFlow(currentFlow);
+                addedFlow.at(currentVertex) -= currentFlow;
+                if (addedFlow.at(nextVertex) == 0)
+                    vertexToProcess.push(nextVertex);
+                addedFlow.at(nextVertex) += currentFlow;
+            }
+
+            if ((phi_.at(currentVertex) -= addedFlow.at(currentVertex)) == 0)
+                if (currentVertex != startVertex)
+                    isDeletedVertex_.at(currentVertex) = true;
+        }
+
+        ///WARNING We mustn't change phi(startVertex)!
+        phi_.at(startVertex) = flow;
+    }
+
+    void doIteration()
+    {
+        for (int pushFlowIteration(0); pushFlowIteration < size_ && std::min(phi_.at(network_.source()), phi_.at(network_.sink())) > 0; ++pushFlowIteration)
+        {
+            int bestVertex(findVertexWithMinimalPhi());
+            if (phi_.at(bestVertex) == 0)
+                break;
+            result_ += phi_.at(bestVertex);
+            pushFlow(bestVertex, phi_.at(bestVertex), network_.sink(), outcomeEdges_);
+            pushFlow(bestVertex, phi_.at(bestVertex), network_.source(), incomeEdges_);
+            phi_.at(bestVertex) = 0;
+            isDeletedVertex_.at(bestVertex) = true;
+        }
+    }
+public:
+    MalhotraKumarMaheshwari() = default;
+
+    void run() final
+    {
+        reset();
+        prepare();
+
+        for (size_t iteration(0); iteration < size_; ++iteration) // |V|
+        {
+            prepareIteration(); // |V| + |E|
+            doIteration(); // |V| * |V| + |E|
+        }
+    }
+};
+
+struct InputData
+{
+    size_t N;
+    std::vector<int> costs;
+    std::vector<std::vector<int>> depends;
+    static InputData read(std::istream& in)
+    {
+        size_t N;
+        in >> N;
+        std::vector<int> costs(N + 1);
+        for (size_t theme(1); theme <= N; ++theme)
+            in >> costs.at(theme);
+        std::vector<std::vector<int>> depends(1);
+        depends.reserve(N + 1);
+        for (size_t theme(1); theme <= N; ++theme)
+        {
+            size_t sizeOfDepends;
+            in >> sizeOfDepends;
+            depends.push_back(std::vector<int>(sizeOfDepends));
+            for (int& dependingTheme : depends.back())
+                in >> dependingTheme;
+        }
+        return {N, costs, depends};
+    }
+};
+
+void solution(InputData input, std::ostream& out)
+{
+    Network graph(input.N + 2, 0, input.N + 1);
+    int costsSum(0);
+    const int inf(5000);
+    for (int theme(1); theme <= input.N; ++theme)
+    {
+        if (input.costs.at(theme) >= 0)
+        {
+            costsSum += input.costs.at(theme);
+            graph.insertEdge(graph.source(), theme, input.costs.at(theme));
+        } else graph.insertEdge(theme, graph.sink(), -input.costs.at(theme));
+        for (int depend : input.depends.at(theme))
+            graph.insertEdge(theme, depend, inf);
+    }
+    MalhotraKumarMaheshwari algorithm;
+    algorithm.loadNetwork(std::move(graph));
+    algorithm.reset();
+    algorithm.run();
+    algorithm.storeNetwork(graph);
+    out << costsSum - algorithm.result() << std::endl;
 }
 
-template <typename capacity_t> inline auto
-FlowNetwork<capacity_t>::vertex(id_t vertexId) const
+int main(int argc, char** argv)
 {
-    return VertexView<true>{vertexId, this};
-}
-
-template <typename capacity_t> inline auto
-FlowNetwork<capacity_t>::vertex(id_t vertexId)
-{
-    return VertexView<false>{vertexId, this};
-}
-
-template <typename capacity_t>
-inline void FlowNetwork<capacity_t>::insertEdge(
-        id_t fromVertex,
-        id_t toVertex,
-        capacity_t capacity,
-        bool is_directed)
-{
-    baseInsertEdge(fromVertex, toVertex, capacity);
-    baseInsertEdge(toVertex, fromVertex, is_directed ? capacity_t(0) : capacity);
+    std::ios_base::sync_with_stdio(false);
+    solution(InputData::read(std::cin), std::cout);
 }

@@ -4,15 +4,13 @@
 #include <algorithm>
 #include <iostream>
 #include <memory>
+#include <functional>
 
-/**
- * 0 - source
- * 1 - sink
- */
 class Network
 {
 public:
     constexpr static int None = -1;
+    constexpr static int Inf = 1000000;
     struct edge_t
     {
         int startVertex = None;
@@ -174,6 +172,7 @@ protected:
     Network network_;
     int result_ = 0;
     size_t size_ = 0;
+
 public:
     FlowFindingAlgorithm() = default;
 
@@ -189,238 +188,224 @@ public:
 class MalhotraKumarMaheshwari : public FlowFindingAlgorithm
 {
 private:
-    std::vector<int> phi_;
-    std::vector<int> level_;
-    std::vector<Network::view_t<Network::BackEdgeIterator>> incomeEdges_;
-    std::vector<Network::view_t<Network::EdgeIterator>> outcomeEdges_;
-    //std::vector<bool> isDeletedVertex_;
+    std::vector<int>
+            incomePhi_,
+            outcomePhi_,
+            slice_,
+            addedFlow_;
+
+    std::vector<Network::view_t<Network::EdgeIterator>> edgeLists_;
+    std::vector<Network::view_t<Network::BackEdgeIterator>> backEdgeLists_;
+
+    enum class VertexState : int { Valid, CandidateToDelete, Deleted };
+
+    std::vector<VertexState> vertexStates_;
+    std::vector<int> vertexexToDelete_;
+
+    int phi(int vertex) { return std::min(incomePhi_.at(vertex), outcomePhi_.at(vertex)); }
 
     void prepare()
     {
-        phi_.resize(size_);
-        level_.resize(size_);
-        //isDeletedVertex_.resize(size_);
-        incomeEdges_.resize(size_);
-        outcomeEdges_.resize(size_);
+        incomePhi_.resize(size_);
+        outcomePhi_.resize(size_);
+        slice_.resize(size_);
+        edgeLists_.resize(size_);
+        backEdgeLists_.resize(size_);
+        vertexStates_.resize(size_);
+        vertexexToDelete_.clear();
+        addedFlow_.resize(size_);
     }
 
     void buildSlices()
     {
-        level_.assign(size_, std::numeric_limits<int>::max());
-
-        std::queue<int> bfsQueue;
-        level_.at(network_.source()) = 0;
-        bfsQueue.push(network_.source());
-
+        std::queue<int> bfsQueue({network_.source()});
+        slice_.assign(size_, size_);
+        slice_.at(network_.source()) = 0;
         while (!bfsQueue.empty())
         {
-            int currentVertex(bfsQueue.front());
+            int vertex(bfsQueue.front());
             bfsQueue.pop();
-//            auto edgeList = network_.vertexEdgeList(currentVertex);
-//            for (auto edge(edgeList.begin()); edge != edgeList.end(); ++edge)
-//                if (edge.isStraight() && level_.at(edge->finishVertex) > level_.at(currentVertex) + 1) {
-//                    level_.at(edge->finishVertex) = level_.at(currentVertex) + 1;
-//                    bfsQueue.push(edge->finishVertex);
-//                }
-            for (const auto& edge : network_.vertexEdgeList(currentVertex))
-                if (edge.residualCapacity() > 0 && level_.at(currentVertex) + 1 < level_.at(edge.finishVertex))
+            for (Network::edge_t& edge : network_.vertexEdgeList(vertex))
+                if (edge.residualCapacity() > 0 && slice_.at(edge.goThroughEdge(vertex)) == size_)
                 {
-                    level_.at(edge.finishVertex) = level_.at(currentVertex) + 1;
-                    bfsQueue.push(edge.finishVertex);
+                    bfsQueue.push(edge.goThroughEdge(vertex));
+                    slice_.at(edge.goThroughEdge(vertex)) = slice_.at(vertex) + 1;
                 }
         }
     }
 
-    //TODO To add checking of residual capacity
+    void markInvalidVertex(int vertex)
+    {
+        if (vertexStates_.at(vertex) == VertexState::Valid)
+        {
+            vertexexToDelete_.push_back(vertex);
+            vertexStates_.at(vertex) = VertexState::CandidateToDelete;
+        }
+    }
+
+    void deleteInvalidVertexes()
+    {
+        while (!vertexexToDelete_.empty())
+        {
+            int vertex(vertexexToDelete_.back());
+            vertexexToDelete_.pop_back();
+            for (Network::edge_t& edge : edgeLists_.at(vertex))
+                if (isValidEdge(edge))
+                {
+                    int nextVertex(edge.goThroughEdge(vertex));
+                    if ((incomePhi_.at(nextVertex) -= edge.residualCapacity()) == 0)
+                        markInvalidVertex(nextVertex);
+                }
+            for (Network::edge_t& edge : backEdgeLists_.at(vertex))
+                if (isValidEdge(edge))
+                {
+                    int prevVertex(edge.goThroughEdge(vertex));
+                    if ((outcomePhi_.at(prevVertex) -= edge.residualCapacity()) == 0)
+                        markInvalidVertex(prevVertex);
+                }
+        }
+    }
+
+    void validateSlices()
+    {
+        std::queue<int> bfsQueue({network_.sink()});
+        std::vector<bool> visited(size_, false);
+        visited.at(network_.sink()) = true;
+        while (!bfsQueue.empty())
+        {
+            int vertex(bfsQueue.front());
+            bfsQueue.pop();
+            for (Network::edge_t& edge : network_.vertexBackEdgeList(vertex))
+                if (edge.residualCapacity() > 0 && slice_.at(edge.goThroughEdge(vertex)) == slice_.at(vertex) - 1)
+                {
+                    visited.at(edge.goThroughEdge(vertex)) = true;
+                    bfsQueue.push(edge.goThroughEdge(vertex));
+                }
+        }
+        for (int vertex(0); vertex < size_; ++vertex)
+            if (!visited.at(vertex))
+                markInvalidVertex(vertex);
+    }
+
     bool isValidEdge(const Network::edge_t& edge)
     {
-        return level_.at(edge.finishVertex) == level_.at(edge.startVertex) + 1
-                && phi_.at(edge.startVertex) > 0 && phi_.at(edge.finishVertex) > 0
-                && edge.residualCapacity() > 0;
-                //&& !isDeletedVertex_.at(edge.startVertex)
-                //&& !isDeletedVertex_.at(edge.finishVertex);
+        return edge.residualCapacity() > 0 && slice_.at(edge.finishVertex) == slice_.at(edge.startVertex) + 1;
     }
 
     void prepareIteration()
     {
-        for (int vertex(0); vertex != size_; ++vertex)
-        {
-            incomeEdges_.at(vertex) = network_.vertexBackEdgeList(vertex);
-            outcomeEdges_.at(vertex) = network_.vertexEdgeList(vertex);
-        }
+        vertexStates_.assign(size_, VertexState::Valid);
 
         buildSlices();
+        validateSlices();
 
-//        for (int vertex(0); vertex < size_; ++vertex)
-//            if (level_.at(vertex) >= size_)
-//                isDeletedVertex_.at(vertex) = true;
-        //isDeletedVertex_.assign(size_, false);
-        phi_.assign(size_, 0);
-        for (int vertex(0); vertex != size_; ++vertex)
-            if (vertex == network_.source())
+        outcomePhi_.assign(size_, 0);
+        incomePhi_.assign(size_, 0);
+
+        for (int vertex(0); vertex < size_; ++vertex)
+        {
+            edgeLists_.at(vertex) = network_.vertexEdgeList(vertex);
+            backEdgeLists_.at(vertex) = network_.vertexBackEdgeList(vertex);
+            if (slice_.at(vertex) == size_)
             {
-                for (const auto& edge : outcomeEdges_.at(vertex))
-                    if (isValidEdge(edge))
-                        phi_.at(vertex) += edge.residualCapacity();
+                markInvalidVertex(vertex);
+                continue;
             }
-            else if (vertex == network_.sink())
-            {
-                for (const auto& edge : incomeEdges_.at(vertex))
-                    if (isValidEdge(edge))
-                        phi_.at(vertex) += edge.residualCapacity();
-            }
-            else
-            {
-                int incomeResidualCapacity(0), outcomeResidualCapacity(0);
-                for (const auto& edge : incomeEdges_.at(vertex))
-                    if (isValidEdge(edge))
-                        incomeResidualCapacity += edge.residualCapacity();
-                for (const auto& edge : outcomeEdges_.at(vertex))
-                    if (isValidEdge(edge))
-                        outcomeResidualCapacity += edge.residualCapacity();
-                phi_.at(vertex) = std::min(incomeResidualCapacity, outcomeResidualCapacity);
-            }
+            for (Network::edge_t& edge : network_.vertexEdgeList(vertex))
+                if (isValidEdge(edge))
+                    outcomePhi_.at(vertex) += edge.residualCapacity();
+            for (Network::edge_t& edge : network_.vertexBackEdgeList(vertex))
+                if (isValidEdge(edge))
+                    incomePhi_.at(vertex) += edge.residualCapacity();
+        }
+
+        outcomePhi_.at(network_.sink()) = Network::Inf;
+        incomePhi_.at(network_.source()) = Network::Inf;
+
+        deleteInvalidVertexes();
     }
 
     int findVertexWithMinimalPhi()
     {
+        if (vertexStates_.at(network_.source()) != VertexState::Valid)
+            return Network::None;
         int bestVertex(Network::None);
         for (int vertex(0); vertex < size_; ++vertex)
-            //if (phi_.at(vertex) == 0)
-                //isDeletedVertex_.at(vertex) = true;
-            //else
-            if (phi_.at(vertex) > 0 && (bestVertex == Network::None || phi_.at(vertex) < phi_.at(bestVertex)))
+            if (vertexStates_.at(vertex) == VertexState::Valid &&
+                    (bestVertex == Network::None || phi(bestVertex) > phi(vertex))
+            )
                 bestVertex = vertex;
         return bestVertex;
     }
-    
-    template <typename EdgeIteratorType>
-    std::vector<bool> checkAccessabilityFrom(
-            int vertex, 
-            std::vector<Network::view_t<EdgeIteratorType>>& edgeListForVertex)
+
+    int maxPossibleFlowThroughEdge(int currentVertex, Network::edge_t& edge)
     {
-        std::vector<bool> accessed(size_, false);
-        std::queue<int> bfsQueue;
-        accessed.at(vertex) = true;
-        bfsQueue.push(vertex);
-        
-        while (!bfsQueue.empty())
-        {
-            int currentVertex(bfsQueue.front());
-            bfsQueue.pop();
-            auto& edgeList = edgeListForVertex.at(currentVertex);
-            for (auto& edge : edgeList)
-                if (isValidEdge(edge) && !accessed.at(edge.goThroughEdge(currentVertex)))
-                {
-                    accessed.at(edge.goThroughEdge(currentVertex)) = true;
-                    bfsQueue.push(edge.goThroughEdge(currentVertex));
-                }
-        }
-        return accessed;
-    }
-    
-    template <class EdgeIteratorType>
-    void validateVertexes(int startVertex,
-            std::vector<Network::view_t<EdgeIteratorType>>& edgeListForVertex)
-    {
-        std::queue<int> bfsQueue({startVertex});
-        static std::vector<bool> processedVertexes;
-        processedVertexes.resize(size_);
-        processedVertexes.assign(size_, false);
-        processedVertexes.at(startVertex) = true;
-        while (!bfsQueue.empty())
-        {
-            int currentVertex(bfsQueue.front());
-            bfsQueue.pop();
-            if (phi_.at(currentVertex) > 0)
-                continue;
-            while ()
-        }
+        int nextVertex(edge.goThroughEdge(currentVertex));
+        return std::min(edge.residualCapacity(), phi(nextVertex));
     }
 
-    template <class EdgeIteratorType>
-    void pushFlow(int startVertex, int flow, int finishVertex,
-            std::vector<Network::view_t<EdgeIteratorType>>& edgeListForVertex)
+    template <typename EdgeIterator>
+    void pushFlow(int referencedVertex, int finishVertex, int flow,
+            std::vector<Network::view_t<EdgeIterator>>& edgeLists,
+            std::vector<int>& firstPhi,
+            std::vector<int>& secondPhi)
     {
-        std::queue<int> vertexToProcess;
-        static std::vector<int> addedFlow;
-
-        addedFlow.resize(size_);
-        addedFlow.assign(size_, 0);
-        addedFlow.at(startVertex) = flow;
-        vertexToProcess.push(startVertex);
-
-        while (!vertexToProcess.empty())
+        addedFlow_.at(referencedVertex) = flow;
+        std::queue<int> bfsQueue({referencedVertex});
+        while (!bfsQueue.empty())
         {
-            int currentVertex(vertexToProcess.front());
-            phi_.at(currentVertex) -= addedFlow.at(currentVertex);
-            vertexToProcess.pop();
-            auto& edgeList(edgeListForVertex.at(currentVertex));
-
-            while (addedFlow.at(currentVertex) > 0 && !edgeList.empty())
-            {
-                if (!isValidEdge(*edgeList.begin())
-                    || edgeList.begin()->residualCapacity() == 0)
+            int vertex(bfsQueue.front());
+            bfsQueue.pop();
+            secondPhi.at(vertex) -= addedFlow_.at(vertex);
+            if (vertex != finishVertex)
+                while (addedFlow_.at(vertex) > 0)
                 {
-                    edgeList.popLastEdge();
-                    continue;
+                    Network::edge_t& edge = *edgeLists.at(vertex).begin();
+                    int nextVertex(edge.goThroughEdge(vertex));
+                    int currentFlow(std::min(addedFlow_.at(vertex), maxPossibleFlowThroughEdge(vertex, edge)));
+                    if (vertexStates_.at(nextVertex) != VertexState::Valid
+                        || !isValidEdge(edge)
+                        || currentFlow == 0)
+                    {
+                        edgeLists.at(vertex).popLastEdge();
+                        continue;
+                    }
+                    if (addedFlow_.at(nextVertex) == 0)
+                        bfsQueue.push(nextVertex);
+                    addedFlow_.at(nextVertex) += currentFlow;
+                    edgeLists.at(vertex).begin().pushFlow(currentFlow);
+                    firstPhi.at(nextVertex) -= currentFlow;
+                    addedFlow_.at(vertex) -= currentFlow;
                 }
-                int nextVertex = edgeList.begin()->goThroughEdge(currentVertex);
-                int currentFlow(std::min({
-                                                 addedFlow.at(currentVertex),
-                                                 edgeList.begin()->residualCapacity(),
-                                                 phi_.at(nextVertex) - addedFlow.at(nextVertex)
-                                         }));
-                if (currentFlow == 0)
-                {
-                    edgeList.popLastEdge();
-                    continue;
-                }
-                edgeList.begin().pushFlow(currentFlow);
-                addedFlow.at(currentVertex) -= currentFlow;
-                if (addedFlow.at(nextVertex) == 0)
-                    vertexToProcess.push(nextVertex);
-                addedFlow.at(nextVertex) += currentFlow;
-            }
-
-            /*if ((phi_.at(currentVertex) -= addedFlow.at(currentVertex)) == 0)
-                if (currentVertex != startVertex)
-                    isDeletedVertex_.at(currentVertex) = true;*/
+            addedFlow_.at(vertex) = 0;
+            if (phi(vertex) == 0)
+                markInvalidVertex(vertex);
         }
-
-        ///WARNING We mustn't change phi(startVertex)!
-        phi_.at(startVertex) = flow;
     }
 
     void doIteration()
     {
-        for (int pushFlowIteration(0); pushFlowIteration < size_ && std::min(phi_.at(network_.source()), phi_.at(network_.sink())) > 0; ++pushFlowIteration)
+        for (int flowPushingIteration(0); flowPushingIteration < size_; ++flowPushingIteration)
         {
-            int bestVertex(findVertexWithMinimalPhi());
-//            if (phi_.at(bestVertex) == 0)
-//                break;
-            if (bestVertex == Network::None)
-                break;
-            //TODO Вот это неправильно, надо прибавлять лишь в том случае, если поток правда можно пропихнуть
-            result_ += phi_.at(bestVertex);
-            pushFlow(bestVertex, phi_.at(bestVertex), network_.sink(), outcomeEdges_);
-            pushFlow(bestVertex, phi_.at(bestVertex), network_.source(), incomeEdges_);
-            phi_.at(bestVertex) = 0;
-            //isDeletedVertex_.at(bestVertex) = true;
+            addedFlow_.assign(size_, 0);
+            int referencedVertex(findVertexWithMinimalPhi());
+            if (referencedVertex == Network::None)
+                return;
+            int flow(phi(referencedVertex));
+            result_ += flow;
+            pushFlow(referencedVertex, network_.sink(), flow, edgeLists_, incomePhi_, outcomePhi_);
+            pushFlow(referencedVertex, network_.source(), flow, backEdgeLists_, outcomePhi_, incomePhi_);
+            deleteInvalidVertexes();
         }
     }
 public:
-    MalhotraKumarMaheshwari() = default;
-
-    void run() final
+    void run()
     {
-        reset();
         prepare();
-
-        for (size_t iteration(0); iteration < size_; ++iteration) // |V|
+        for (int iteration(0); iteration <= size_; ++iteration)
         {
-            prepareIteration(); // |V| + |E|
-            doIteration(); // |V| * |V| + |E|
+            prepareIteration();
+            doIteration();
         }
     }
 };
@@ -455,7 +440,6 @@ void solution(InputData input, std::ostream& out)
 {
     Network graph(input.N + 2, 0, input.N + 1);
     int costsSum(0);
-    const int inf(2000000);
     for (int theme(1); theme <= input.N; ++theme)
     {
         if (input.costs.at(theme) >= 0)
@@ -464,7 +448,7 @@ void solution(InputData input, std::ostream& out)
             graph.insertEdge(graph.source(), theme, input.costs.at(theme));
         } else graph.insertEdge(theme, graph.sink(), -input.costs.at(theme));
         for (int depend : input.depends.at(theme))
-            graph.insertEdge(theme, depend, inf);
+            graph.insertEdge(theme, depend, Network::Inf);
     }
     MalhotraKumarMaheshwari algorithm;
     algorithm.loadNetwork(std::move(graph));

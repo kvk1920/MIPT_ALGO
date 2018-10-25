@@ -193,13 +193,13 @@ private:
     std::vector<int> level_;
     std::vector<Network::view_t<Network::BackEdgeIterator>> incomeEdges_;
     std::vector<Network::view_t<Network::EdgeIterator>> outcomeEdges_;
-    std::vector<bool> isDeletedVertex_;
+    //std::vector<bool> isDeletedVertex_;
 
     void prepare()
     {
         phi_.resize(size_);
         level_.resize(size_);
-        isDeletedVertex_.resize(size_);
+        //isDeletedVertex_.resize(size_);
         incomeEdges_.resize(size_);
         outcomeEdges_.resize(size_);
     }
@@ -231,11 +231,14 @@ private:
         }
     }
 
+    //TODO To add checking of residual capacity
     bool isValidEdge(const Network::edge_t& edge)
     {
         return level_.at(edge.finishVertex) == level_.at(edge.startVertex) + 1
-                && !isDeletedVertex_.at(edge.startVertex)
-                && !isDeletedVertex_.at(edge.finishVertex);
+                && phi_.at(edge.startVertex) > 0 && phi_.at(edge.finishVertex) > 0
+                && edge.residualCapacity() > 0;
+                //&& !isDeletedVertex_.at(edge.startVertex)
+                //&& !isDeletedVertex_.at(edge.finishVertex);
     }
 
     void prepareIteration()
@@ -251,7 +254,7 @@ private:
 //        for (int vertex(0); vertex < size_; ++vertex)
 //            if (level_.at(vertex) >= size_)
 //                isDeletedVertex_.at(vertex) = true;
-        isDeletedVertex_.assign(size_, false);
+        //isDeletedVertex_.assign(size_, false);
         phi_.assign(size_, 0);
         for (int vertex(0); vertex != size_; ++vertex)
             if (vertex == network_.source())
@@ -281,13 +284,58 @@ private:
 
     int findVertexWithMinimalPhi()
     {
-        int bestVertex(0);
+        int bestVertex(Network::None);
         for (int vertex(0); vertex < size_; ++vertex)
-            if (phi_.at(vertex) == 0)
-                isDeletedVertex_.at(vertex) = true;
-            else if (phi_.at(bestVertex) > phi_.at(vertex))
+            //if (phi_.at(vertex) == 0)
+                //isDeletedVertex_.at(vertex) = true;
+            //else
+            if (phi_.at(vertex) > 0 && (bestVertex == Network::None || phi_.at(vertex) < phi_.at(bestVertex)))
                 bestVertex = vertex;
         return bestVertex;
+    }
+    
+    template <typename EdgeIteratorType>
+    std::vector<bool> checkAccessabilityFrom(
+            int vertex, 
+            std::vector<Network::view_t<EdgeIteratorType>>& edgeListForVertex)
+    {
+        std::vector<bool> accessed(size_, false);
+        std::queue<int> bfsQueue;
+        accessed.at(vertex) = true;
+        bfsQueue.push(vertex);
+        
+        while (!bfsQueue.empty())
+        {
+            int currentVertex(bfsQueue.front());
+            bfsQueue.pop();
+            auto& edgeList = edgeListForVertex.at(currentVertex);
+            for (auto& edge : edgeList)
+                if (isValidEdge(edge) && !accessed.at(edge.goThroughEdge(currentVertex)))
+                {
+                    accessed.at(edge.goThroughEdge(currentVertex)) = true;
+                    bfsQueue.push(edge.goThroughEdge(currentVertex));
+                }
+        }
+        return accessed;
+    }
+    
+    template <class EdgeIteratorType>
+    void validateVertexes(int startVertex,
+            std::vector<Network::view_t<EdgeIteratorType>>& edgeListForVertex)
+    {
+        std::queue<int> bfsQueue({startVertex});
+        static std::vector<bool> processedVertexes;
+        processedVertexes.resize(size_);
+        processedVertexes.assign(size_, false);
+        processedVertexes.at(startVertex) = true;
+        while (!bfsQueue.empty())
+        {
+            int currentVertex(bfsQueue.front());
+            bfsQueue.pop();
+            if (phi_.at(currentVertex) > 0)
+                continue;
+            while ()
+        }
     }
 
     template <class EdgeIteratorType>
@@ -305,6 +353,7 @@ private:
         while (!vertexToProcess.empty())
         {
             int currentVertex(vertexToProcess.front());
+            phi_.at(currentVertex) -= addedFlow.at(currentVertex);
             vertexToProcess.pop();
             auto& edgeList(edgeListForVertex.at(currentVertex));
 
@@ -334,9 +383,9 @@ private:
                 addedFlow.at(nextVertex) += currentFlow;
             }
 
-            if ((phi_.at(currentVertex) -= addedFlow.at(currentVertex)) == 0)
+            /*if ((phi_.at(currentVertex) -= addedFlow.at(currentVertex)) == 0)
                 if (currentVertex != startVertex)
-                    isDeletedVertex_.at(currentVertex) = true;
+                    isDeletedVertex_.at(currentVertex) = true;*/
         }
 
         ///WARNING We mustn't change phi(startVertex)!
@@ -348,13 +397,16 @@ private:
         for (int pushFlowIteration(0); pushFlowIteration < size_ && std::min(phi_.at(network_.source()), phi_.at(network_.sink())) > 0; ++pushFlowIteration)
         {
             int bestVertex(findVertexWithMinimalPhi());
-            if (phi_.at(bestVertex) == 0)
+//            if (phi_.at(bestVertex) == 0)
+//                break;
+            if (bestVertex == Network::None)
                 break;
+            //TODO Вот это неправильно, надо прибавлять лишь в том случае, если поток правда можно пропихнуть
             result_ += phi_.at(bestVertex);
             pushFlow(bestVertex, phi_.at(bestVertex), network_.sink(), outcomeEdges_);
             pushFlow(bestVertex, phi_.at(bestVertex), network_.source(), incomeEdges_);
             phi_.at(bestVertex) = 0;
-            isDeletedVertex_.at(bestVertex) = true;
+            //isDeletedVertex_.at(bestVertex) = true;
         }
     }
 public:
@@ -403,7 +455,7 @@ void solution(InputData input, std::ostream& out)
 {
     Network graph(input.N + 2, 0, input.N + 1);
     int costsSum(0);
-    const int inf(5000);
+    const int inf(2000000);
     for (int theme(1); theme <= input.N; ++theme)
     {
         if (input.costs.at(theme) >= 0)

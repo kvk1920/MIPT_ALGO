@@ -5,6 +5,7 @@
 #include <iostream>
 #include <memory>
 #include <functional>
+#include <list>
 
 class Network
 {
@@ -172,7 +173,6 @@ protected:
     Network network_;
     int result_ = 0;
     size_t size_ = 0;
-
 public:
     FlowFindingAlgorithm() = default;
 
@@ -285,6 +285,7 @@ private:
         for (int vertex(0); vertex < size_; ++vertex)
             if (!visited.at(vertex))
                 markInvalidVertex(vertex);
+                //slice_.at(vertex) = size_;
     }
 
     bool isValidEdge(const Network::edge_t& edge)
@@ -399,7 +400,7 @@ private:
         }
     }
 public:
-    void run()
+    void run() final
     {
         prepare();
         for (int iteration(0); iteration <= size_; ++iteration)
@@ -407,6 +408,94 @@ public:
             prepareIteration();
             doIteration();
         }
+    }
+};
+
+class PreflowPushAlgorithm : public FlowFindingAlgorithm
+{
+private:
+    std::vector<int> height_, overage_;
+    std::vector<Network::view_t<Network::EdgeIterator>> edgeLists_;
+
+    void prepare()
+    {
+        height_.resize(size_);
+        height_.assign(size_, 0);
+        height_.at(network_.source()) = size_;
+
+        overage_.resize(size_);
+        overage_.assign(size_, 0);
+
+        for (
+                auto edge = network_.vertexEdgeList(network_.source()).begin();
+                edge != network_.vertexEdgeList(network_.source()).end();
+                ++edge
+        )
+        {
+            edge.pushFlow(edge->capacity);
+            overage_.at(edge->finishVertex) += edge->capacity;
+            overage_.at(network_.source()) -= edge->capacity;
+        }
+
+        edgeLists_.clear();
+        edgeLists_.reserve(size_);
+        for (int vertex(0); vertex < size_; ++vertex)
+            edgeLists_.push_back(network_.vertexEdgeList(vertex));
+    }
+
+    void push(Network::EdgeIterator edge)
+    {
+        int flow(std::min(overage_.at(edge->startVertex), edge->residualCapacity()));
+        edge.pushFlow(flow);
+        overage_.at(edge->startVertex) -= flow;
+        overage_.at(edge->finishVertex) += flow;
+    }
+
+    void relabel(int vertex)
+    {
+        int newHeight(Network::Inf);
+        for (auto& edge : network_.vertexEdgeList(vertex))
+            if (edge.residualCapacity() > 0)
+                newHeight = std::min(newHeight, height_.at(edge.finishVertex));
+        height_.at(vertex) = newHeight + 1;
+    }
+
+    bool discharge(int vertex)
+    {
+        if (overage_.at(vertex) <= 0)
+            return false;
+        while (overage_.at(vertex) > 0)
+        {
+            auto& edges = edgeLists_.at(vertex);
+            if (edges.empty())
+            {
+                edges = network_.vertexEdgeList(vertex);
+                relabel(vertex);
+            }
+            else
+            {
+                if (edges.begin()->residualCapacity() > 0
+                && height_.at(edges.begin()->finishVertex) + 1 == height_.at(vertex))
+                    push(edges.begin());
+                else
+                    edges.popLastEdge();
+            }
+        }
+        return true;
+    }
+public:
+    void run() final
+    {
+        prepare();
+        bool canDoPushOrRelabel;
+        do
+        {
+            canDoPushOrRelabel = false;
+            for (int vertex(0); vertex < size_; ++vertex)
+                if (vertex != network_.source() && vertex != network_.sink())
+                    canDoPushOrRelabel |= discharge(vertex);
+        } while (canDoPushOrRelabel);
+        result_ = overage_.at(network_.sink());
     }
 };
 
@@ -436,30 +525,31 @@ struct InputData
     }
 };
 
+template <typename Algorithm>
 void solution(InputData input, std::ostream& out)
 {
     Network graph(input.N + 2, 0, input.N + 1);
     int costsSum(0);
     for (int theme(1); theme <= input.N; ++theme)
     {
-        if (input.costs.at(theme) >= 0)
+        if (input.costs.at(theme) > 0)
         {
             costsSum += input.costs.at(theme);
             graph.insertEdge(graph.source(), theme, input.costs.at(theme));
-        } else graph.insertEdge(theme, graph.sink(), -input.costs.at(theme));
+        } else if (input.costs.at(theme) < 0) graph.insertEdge(theme, graph.sink(), -input.costs.at(theme));
         for (int depend : input.depends.at(theme))
             graph.insertEdge(theme, depend, Network::Inf);
     }
-    MalhotraKumarMaheshwari algorithm;
-    algorithm.loadNetwork(std::move(graph));
-    algorithm.reset();
-    algorithm.run();
-    algorithm.storeNetwork(graph);
-    out << costsSum - algorithm.result() << std::endl;
+    std::unique_ptr<FlowFindingAlgorithm> algorithm = std::make_unique<Algorithm>();
+    algorithm->loadNetwork(std::move(graph));
+    algorithm->reset();
+    algorithm->run();
+    algorithm->storeNetwork(graph);
+    out << costsSum - algorithm->result() << std::endl;
 }
 
 int main(int argc, char** argv)
 {
     std::ios_base::sync_with_stdio(false);
-    solution(InputData::read(std::cin), std::cout);
+    solution<MalhotraKumarMaheshwari>(InputData::read(std::cin), std::cout);
 }

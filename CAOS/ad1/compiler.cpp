@@ -1,6 +1,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 typedef struct {
 	const char	* name;
@@ -8,7 +9,7 @@ typedef struct {
 } symbol_t;
 
 static uint32_t 	* output;
-static const char 	* expr;
+static char 		* expr;
 static const symbol_t   * extern_symbols;
 static size_t 		current_pos;
 
@@ -58,17 +59,16 @@ static void add(int dst, int src);
 static void sub(int dst, int src);
 static void mul(int dst, int src);
 
-static void go_to_next_char();
 static void * get_current_symbol();
 static void start_compile();
 static void finish_compile();
 
-static void func_call();
+static void func_call(void * pointer);
 
 static void parse_epxr();
 static void parse_num();
-static void parse_var();
-static void parse_function();
+static void process_var(void * pointer);
+static void process_function(void * pointer);
 
 void
 jit_compile_expression_to_arm(
@@ -77,9 +77,75 @@ jit_compile_expression_to_arm(
 			void 		* out_buffer
 			)
 {
+	expr = malloc(strlen(expression) + 1);
+	int i = 0;
+	for (int j = 0; expression[j]; ++j)
+		if (expression[j] != ' ')
+			expr[i++] = expression[j];
+	expr[i] = '\0';
+
 	start_compile();
 	parse_expr();
-	finish_compile();	
+	finish_compile();
+
+	free(expr);
+}
+
+static void
+parse_expr()
+{
+	if (expr[current_pos] == '+' || expr[current_pos] == '-')
+	{
+		char sign = expr[current_pos];
+		++current_pos();
+		parse_expr();
+		if (sign == '-')
+			mul(R0, -1);
+	}
+	else
+	{
+		if (expr[current_pos] == '(')
+		{
+			++current_pos;
+			parse_expr();
+			++current_pos;
+		}
+		else if (isdigit(expr[current_pos]))
+			parse_num();
+		else
+		{
+			void * call_addr = get_current_symbol();
+			if (expr[current_pos] == '(')
+				process_function(call_addr);
+			else process_var(call_addr);
+		}
+		if (expr[current_pos] == '*')
+		{
+			push(R0);
+			++current_pos;
+			parse_expr();
+			pop(R1);
+			mul(R0, R1);
+			return;
+		}
+
+	}
+}
+
+static void
+func_call(void * pointer)
+{
+	mov_val(R4, pointer);
+	push(shifted_bit(LR));
+	write_instruction(
+		COND_AL |
+		shifted_bit(24) |
+		shifted_bit(21) |
+		shifted_bit(5) |
+		shifted_bit(4) |
+		R4
+		);
+	pop(shifted_bit(LR));
 }
 
 static void
@@ -117,18 +183,10 @@ finish_compile()
 		);
 }
 
-static void
-go_to_next_char()
-{
-	while (expr[current_pos] == ' ')
-		++current_pos;
-}
-
 static void *
 get_current_symbol()
 {
-	go_to_next_char();
-	size_t j = current_pos, size_of_name = 0;
+	size_t j = current_pos;
 	while (expr[current_pos]
 		&& expr[current_pos] != '('
 		&& expr[current_pos] != '+'
@@ -137,33 +195,24 @@ get_current_symbol()
 		&& expr[current_pos] != ','
 		&& expr[current_pos] != ')'
 		)
-	{
 		++current_pos;
-		go_to_next_char();
-		++size_of_name;
-	}
+	void * pointer = 0;
+	char buff = expr[current_pos];
+	expr[current_pos] = '\0';
 	for (
 		const symbol_t * symbol = extern_symbols;
 		symbol->name;
 		++symbol
 		)
-		if (strlen(symbol->name) == size_of_name)
+		if (strcmp(expr + j, symbol->name) == 0)
 		{
-			int pos = 0;
-			bool same_names = false;
-			for (int i = j; pos != size_of_name; ++i)
-				if (expr[i] != ' ')
-					if (expr[i] != symbol->name[pos])
-					{
-						same_names = false;
-						break;
-					}
-					else ++pos;
-			if (same_names)
-				return symbol->pointer;
+			pointer = symbol->pointer;
+			break;
 		}
-	return 0;
+	expr[current_pos] = buff;
+	return pointer;
 }
+
 static void
 write_instruction(uint32_t instruction)
 {

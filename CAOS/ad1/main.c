@@ -17,7 +17,7 @@ jit_compile_expression_to_arm(const char * expression,
                               void * out_buffer);
 
 // available functions to be used within JIT-compiled code
-static int my_div(int a, int b) { return a / b; }
+static int my_div(int a, int b) { /*fprintf(stderr, "my_div(%i, %i) called\n", a, b);*/ return a / b; }
 static int my_mod(int a, int b) { return a % b; }
 static int my_inc(int a) { return ++a; }
 static int my_dec(int a) { return --a; }
@@ -175,6 +175,7 @@ call_function_and_print_result(void * addr)
 void
 main()
 {
+    //fprintf(stderr, "%p\n", my_div);
     size_t functions_count = init_symbols();
     read_input(functions_count);
     void * code_buffer = init_program_code_buffer();

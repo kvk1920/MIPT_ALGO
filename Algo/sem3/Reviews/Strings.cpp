@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <cassert>
+#include <cstdint>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -6,12 +8,15 @@
 #include <string>
 #include <vector>
 
+/*
 inline void Assert(bool expr) {
     if (!expr) {
         volatile int x = 0;
         while (true) ++x;
     }
 }
+ */
+#define Assert assert
 
 template <typename TChar>
 class SubstringMachine {
@@ -460,26 +465,46 @@ inline void WriteIntString(const std::basic_string<int>& string, std::ostream& o
     }
 }
 
-int main() {
-    using namespace std;
-
-    ios_base::sync_with_stdio(false);
-    int n, m;
-    cin >> n >> m;
-    auto s(ReadIntString(n, cin));
-    std::unique_ptr<SubstringMachine<int>> machine(new SuffixTree<int>(s));
-    SubstringMachine<int>::RightContextIterator best_it;
-    long long best_val(0);
-    for (SubstringMachine<int>::RightContextIterator it(machine->GetRightContextIterator()); it.Valid(); it = it.Next()) {
-        if (it.GetMaximalLength() * it.GetNumOfOccurrences() > best_val) {
-            best_val = int64_t(it.GetMaximalLength()) * it.GetNumOfOccurrences();
-            best_it = it;
-        }
-        //WriteIntString(it.GetStateString(), cerr);
-        //cerr << endl << it.GetMaximalLength() << ' ' << it.GetNumOfOccurrences() << endl;
+struct Result {
+    int64_t refren_value;
+    std::basic_string<int> substring;
+    void Write(std::ostream& out) {
+        out << refren_value << std::endl;
+        out << std::size(substring) << std::endl;
+        WriteIntString(substring, out);
     }
-    cout << best_val << '\n';
-    auto ans(best_it.GetStateString());
-    cout << size(ans) << '\n';
-    WriteIntString(ans, cout);
+};
+
+auto ReadInput(std::istream& in) {
+    size_t n, m;
+    in >> n >> m;
+    return ReadIntString(n, in);
+}
+
+Result Run(const std::basic_string<int>& string, const std::string& chosen_machine) {
+    std::unique_ptr<SubstringMachine<int>> machine;
+
+    if (chosen_machine == "suffix tree") {
+        machine = std::make_unique<SuffixTree<int>>(string);
+    } else if (chosen_machine == "suffix machine") {
+        machine = std::make_unique<SuffixMachine<int>>(string);
+    } else {
+        throw std::logic_error("machine with name \""+ chosen_machine + "\" doesn't exist");
+    }
+
+    SubstringMachine<int>::RightContextIterator best_state;
+    int64_t best_value(0);
+    for (SubstringMachine<int>::RightContextIterator it(machine->GetRightContextIterator()); it.Valid(); it = it.Next()) {
+        if (it.GetMaximalLength() * it.GetNumOfOccurrences() > best_value) {
+            best_value = int64_t(it.GetMaximalLength()) * int64_t(it.GetNumOfOccurrences());
+            best_state = it;
+        }
+    }
+
+    return {best_value, best_state.GetStateString()};
+}
+
+int main() {
+    std::ios_base::sync_with_stdio(false);
+    Run(ReadInput(std::cin), "suffix machine").Write(std::cout);
 }

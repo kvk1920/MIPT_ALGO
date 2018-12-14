@@ -158,12 +158,12 @@ class SuffixMachine : public SubstringMachine<TChar> {
                 p->next.insert({c, v});
             }
 
-            if (p->next[c] == v) {
+            if (p->next.at(c) == v) {
                 v->suffix_link = root_;
                 continue;
             }
 
-            auto q(p->next[c]);
+            auto q(p->next.at(c));
             if (q->length == p->length + 1) {
                 v->suffix_link = q;
                 continue;
@@ -176,8 +176,8 @@ class SuffixMachine : public SubstringMachine<TChar> {
             clone->edge_char = c;
             clone->next = q->next;
             v->suffix_link = q->suffix_link = clone;
-            for (; p->next[c] == q; p = p->suffix_link.lock()) {
-                p->next[c] = clone;
+            for (; p->next.at(c) == q; p = p->suffix_link.lock()) {
+                p->next.at(c) = clone;
             }
         }
     }
@@ -215,50 +215,232 @@ class SuffixMachine : public SubstringMachine<TChar> {
     std::shared_ptr<Vertex> root_;
     std::shared_ptr<Vertex> last_;
 };
-/*
+
 template <typename TChar>
 class SuffixTree : public SubstringMachine<TChar> {
   public:
     using TString = typename SubstringMachine<TChar>::TString;
 
+    explicit SuffixTree(const TString& string) : SuffixTree(TString(string)) {}
+
+    explicit SuffixTree(TString&& string)
+            : INFINITY(std::size(string))
+            , string_(std::make_shared<TString>(std::move(string)))
+            , vertices_(std::make_shared<std::vector<std::shared_ptr<const typename SubstringMachine<TChar>::IVertex>>>())
+    {
+        vertices_->reserve(std::size(string) * 2);
+        Init();
+        Build();
+        Finally();
+    }
 
   private:
     struct Vertex : public SubstringMachine<TChar>::IVertex {
+        TString GetString() const final {
+            std::vector<TString> strings;
+            TString result;
+            result.clear();
 
+            strings.push_back(string->substr(left_bound, right_bound - left_bound));
+            for (auto v(parent.lock()); v->parent.lock(); v = v->parent.lock()) {
+                strings.push_back(string->substr(v->left_bound, v->right_bound - v->left_bound));
+            }
+
+            while (!strings.empty()) {
+                result += strings.back();
+                strings.pop_back();
+            }
+
+            return result;
+        }
+
+        size_t GetMaximalLength() const final {
+            return distance_from_root;
+        }
+
+        size_t GetNumOfOccurrences() const final {
+            return num_of_occurrences;
+        }
+
+        TChar GetChar(size_t distance_from_this) const {
+            return string->at(right_bound - distance_from_this);
+        }
+
+        size_t Length() const {
+            return right_bound - left_bound;
+        }
+
+        TChar FirstChar() const {
+            return string->at(left_bound);
+        }
+
+        bool IsLeaf() const {
+            return children.empty();
+        }
 
         std::map<TChar, std::shared_ptr<Vertex>> children;
-        bool is_terminal;
-        size_t num_of_occurrences;
-        size_t left_bound, right_bound;
+        bool is_terminal = false;
+        size_t num_of_occurrences = 0;
+        size_t distance_from_root = 0;
+        size_t left_bound = 0, right_bound = 0;
         std::shared_ptr<const TString> string;
         std::weak_ptr<Vertex> parent;
         std::weak_ptr<Vertex> suffix_link;
     };
 
-    std::shared_ptr<Vertex> GetLink(std::shared_ptr<Vertex> vertex) {
+    /*std::shared_ptr<Vertex> GetLink(std::shared_ptr<Vertex> vertex) {
         if (auto link = vertex->suffix_link.lock()) {
             return link;
         } else {
             BuildSuffixLink(vertex);
             return vertex->suffix_link.lock();
         }
-    }
+    }*/
 
     void BuildSuffixLink(std::shared_ptr<Vertex> vertex) {
+        if (auto p(vertex->parent.lock()); p == root_) {
+            vertex->suffix_link = SplitEdge(Position{root_}.Go(vertex->left_bound + 1, vertex->right_bound));
+        } else {
+            vertex->suffix_link = SplitEdge(Position{p->suffix_link.lock()}.Go(vertex->left_bound, vertex->right_bound));
+        }
+    }
 
+    void Init() {
+        root_ = std::make_shared<Vertex>();
+        root_->string = string_;
+        last_not_leaf_ = { root_, 0 };
+    }
+
+    void MakeLeaf(std::shared_ptr<Vertex> vertex, size_t position) {
+        auto leaf(std::make_shared<Vertex>());
+
+        leaf->left_bound = position;
+        leaf->right_bound = INFINITY;
+        leaf->parent = vertex;
+        leaf->is_terminal = true;
+
+        leaf->string = string_;
+
+        vertex->children.insert({ leaf->FirstChar(), leaf });
+    }
+
+    void Build() {
+        for (size_t i(0); i < std::size(*string_); ++i) {
+            auto c(string_->at(i));
+            while (true) {
+                if (last_not_leaf_.CanGo(c)) {
+                    last_not_leaf_ = last_not_leaf_.OneStepDown(c);
+                    break;
+                }
+                auto vertex(SplitEdge(last_not_leaf_));
+                MakeLeaf(vertex, i);
+                if (vertex == root_) {
+                    break;
+                }
+                last_not_leaf_ = {vertex->suffix_link.lock()};
+            }
+        }
+    }
+
+    void ProcessVertex(std::shared_ptr<Vertex> vertex) {
+        if (vertex == root_) {
+            vertex->distance_from_root = 0;
+        } else {
+            vertex->distance_from_root = vertex->Length() + vertex->parent.lock()->distance_from_root;
+            vertices_->push_back(std::dynamic_pointer_cast<const typename SubstringMachine<TChar>::IVertex>(vertex));
+        }
+        vertex->num_of_occurrences = vertex->is_terminal ? 1 : 0;
+        for (const auto& [next_char, child] : vertex->children) {
+            ProcessVertex(child);
+            vertex->num_of_occurrences += child->num_of_occurrences;
+        }
+    }
+
+    void Finally() {
+        for (auto v(SplitEdge(last_not_leaf_)); v != root_; v = v->suffix_link.lock()) {
+            v->is_terminal = true;
+        }
+        ProcessVertex(root_);
+    }
+
+    std::shared_ptr<const std::vector<std::shared_ptr<const typename SubstringMachine<TChar>::IVertex>>> GetVertices() const {
+        return vertices_;
     }
 
     struct Position {
+        bool IsVertex() const {
+            return distance_from_down_vertex == 0;
+        }
+
+        bool CanGo(const TChar c) const {
+            if (IsVertex()) {
+                return down_vertex->children.count(c) > 0;
+            } else {
+                return c == down_vertex->GetChar(distance_from_down_vertex);
+            }
+        }
+
+        Position OneStepDown(TChar c) {
+            if (IsVertex()) {
+                Position result{down_vertex->children.at(c)};
+                result.distance_from_down_vertex = result.down_vertex->Length() - 1;
+                return result;
+            } else {
+                Position result(*this);
+                --result.distance_from_down_vertex;
+                return result;
+            }
+        }
+
+        Position Go(size_t l, const size_t r) {
+            const auto& string = *(down_vertex->string);
+            Position result(*this);
+            while (l < r) {
+                if (result.IsVertex()) {
+                    result.down_vertex = result.down_vertex->children.at(string[l]);
+                    result.distance_from_down_vertex = result.down_vertex->Length();
+                } else if (r - l > result.distance_from_down_vertex) {
+                    l += result.distance_from_down_vertex;
+                    result.distance_from_down_vertex = 0;
+                } else {
+                    result.distance_from_down_vertex -= r - l;
+                    l = r;
+                }
+            }
+            return result;
+        }
+
         std::shared_ptr<Vertex> down_vertex;
-        size_t distance_from_down_vertex;
+        size_t distance_from_down_vertex = 0;
     };
 
+    std::shared_ptr<Vertex> SplitEdge(Position position) {
+        if (position.IsVertex()) {
+            return position.down_vertex;
+        }
+        auto u(position.down_vertex->parent.lock());
+        auto v(position.down_vertex);
+        auto new_v(std::make_shared<Vertex>());
+        new_v->string = string_;
+        u->children.at(v->FirstChar()) = new_v;
+        new_v->parent = u;
+        new_v->left_bound = v->left_bound;
+        new_v->right_bound = v->left_bound = v->right_bound - position.distance_from_down_vertex;
+        v->parent = new_v;
+        new_v->children.insert({ v->FirstChar(), v });
+
+        BuildSuffixLink(new_v);
+
+        return new_v;
+    }
+
+    const size_t INFINITY;
     std::shared_ptr<Vertex> root_;
     Position last_not_leaf_;
     std::shared_ptr<TString> string_;
-    std::shared_ptr<std::vector<std::shared_ptr<const IVertex>>> vertices_;
+    std::shared_ptr<std::vector<std::shared_ptr<const typename SubstringMachine<TChar>::IVertex>>> vertices_;
 };
-*/
+
 inline std::basic_string<int> ReadIntString(size_t length, std::istream& in) {
     int element;
     std::basic_string<int> string;
@@ -285,7 +467,7 @@ int main() {
     int n, m;
     cin >> n >> m;
     auto s(ReadIntString(n, cin));
-    std::unique_ptr<SubstringMachine<int>> machine(new SuffixMachine<int>(s));
+    std::unique_ptr<SubstringMachine<int>> machine(new SuffixTree<int>(s));
     SubstringMachine<int>::RightContextIterator best_it;
     long long best_val(0);
     for (SubstringMachine<int>::RightContextIterator it(machine->GetRightContextIterator()); it.Valid(); it = it.Next()) {

@@ -6,6 +6,13 @@
 #include <string>
 #include <vector>
 
+inline void Assert(bool expr) {
+    if (!expr) {
+        volatile int x = 0;
+        while (true) ++x;
+    }
+}
+
 template <typename TChar>
 class SubstringMachine {
   public:
@@ -56,20 +63,24 @@ class SubstringMachine<TChar>::RightContextIterator {
     }
 
     RightContextIterator Next() const noexcept {
+        Assert(Valid());
         RightContextIterator next(*this);
         ++next.index_;
         return next;
     }
 
     SubstringMachine<TChar>::TString GetStateString() const {
+        Assert(Valid());
         return vertices_->at(index_)->GetString();
     }
 
     size_t GetMaximalLength() const {
+        Assert(Valid());
         return vertices_->at(index_)->GetMaximalLength();
     }
 
     size_t GetNumOfOccurrences() const {
+        Assert(Valid());
         return vertices_->at(index_)->GetNumOfOccurrences();
     }
 
@@ -97,7 +108,7 @@ class SuffixMachine : public SubstringMachine<TChar> {
 
   private:
     struct Vertex : public SubstringMachine<TChar>::IVertex {
-        TString GetString() const {
+        TString GetString() const final {
             TString string;
             string.clear();
 
@@ -160,7 +171,7 @@ class SuffixMachine : public SubstringMachine<TChar> {
 
             auto clone(std::make_shared<Vertex>());
             clone->suffix_link = q->suffix_link;
-            clone->length = q->length;
+            clone->length = p->length + 1;
             clone->parent = p;
             clone->edge_char = c;
             clone->next = q->next;
@@ -190,7 +201,9 @@ class SuffixMachine : public SubstringMachine<TChar> {
             ProcessVertex(next_vertex, seen_vertices);
             vertex->num_of_occurrences += next_vertex->num_of_occurrences;
         }
-        vertices_->push_back(vertex);
+        if (vertex != root_) {
+            vertices_->push_back(std::dynamic_pointer_cast<typename SubstringMachine<TChar>::IVertex>(vertex));
+        }
     }
 
     std::shared_ptr<const std::vector<std::shared_ptr<const typename SubstringMachine<TChar>::IVertex>>> GetVertices() const final {
@@ -202,7 +215,50 @@ class SuffixMachine : public SubstringMachine<TChar> {
     std::shared_ptr<Vertex> root_;
     std::shared_ptr<Vertex> last_;
 };
+/*
+template <typename TChar>
+class SuffixTree : public SubstringMachine<TChar> {
+  public:
+    using TString = typename SubstringMachine<TChar>::TString;
 
+
+  private:
+    struct Vertex : public SubstringMachine<TChar>::IVertex {
+
+
+        std::map<TChar, std::shared_ptr<Vertex>> children;
+        bool is_terminal;
+        size_t num_of_occurrences;
+        size_t left_bound, right_bound;
+        std::shared_ptr<const TString> string;
+        std::weak_ptr<Vertex> parent;
+        std::weak_ptr<Vertex> suffix_link;
+    };
+
+    std::shared_ptr<Vertex> GetLink(std::shared_ptr<Vertex> vertex) {
+        if (auto link = vertex->suffix_link.lock()) {
+            return link;
+        } else {
+            BuildSuffixLink(vertex);
+            return vertex->suffix_link.lock();
+        }
+    }
+
+    void BuildSuffixLink(std::shared_ptr<Vertex> vertex) {
+
+    }
+
+    struct Position {
+        std::shared_ptr<Vertex> down_vertex;
+        size_t distance_from_down_vertex;
+    };
+
+    std::shared_ptr<Vertex> root_;
+    Position last_not_leaf_;
+    std::shared_ptr<TString> string_;
+    std::shared_ptr<std::vector<std::shared_ptr<const IVertex>>> vertices_;
+};
+*/
 inline std::basic_string<int> ReadIntString(size_t length, std::istream& in) {
     int element;
     std::basic_string<int> string;
@@ -234,9 +290,11 @@ int main() {
     long long best_val(0);
     for (SubstringMachine<int>::RightContextIterator it(machine->GetRightContextIterator()); it.Valid(); it = it.Next()) {
         if (it.GetMaximalLength() * it.GetNumOfOccurrences() > best_val) {
-            best_val = (long long)it.GetMaximalLength() * it.GetNumOfOccurrences();
+            best_val = int64_t(it.GetMaximalLength()) * it.GetNumOfOccurrences();
             best_it = it;
         }
+        //WriteIntString(it.GetStateString(), cerr);
+        //cerr << endl << it.GetMaximalLength() << ' ' << it.GetNumOfOccurrences() << endl;
     }
     cout << best_val << '\n';
     auto ans(best_it.GetStateString());

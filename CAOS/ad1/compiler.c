@@ -6,7 +6,7 @@
 
 typedef struct {
     const char	    * name;
-    void	 * pointer;
+    void	   * pointer;
 } symbol_t;
 
 static uint32_t 	* output;                               //out_buff

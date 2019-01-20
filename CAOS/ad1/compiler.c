@@ -5,8 +5,8 @@
 #include <stdint.h>
 
 typedef struct {
-    const char	      * name;
-    void	      * pointer;
+    const char	        * name;
+    void	        * pointer;
 } symbol_t;
 
 static uint32_t 	* output;                               //out_buff

@@ -9,7 +9,7 @@ typedef struct {
     void		* pointer;
 } symbol_t;
 
-static uint32_t 	* output;                               //iut_buff
+static uint32_t 	* output;                               //out_buff
 static char 		* expr;                                 //expression without spaces
 static const symbol_t   * extern_symbols;                   //externs
 static size_t 		current_pos;                            //current processing position
